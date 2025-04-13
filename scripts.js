@@ -698,9 +698,6 @@ function setupKeyboardControls() {
     const container = document.getElementById('visualization-container');
     container.tabIndex = 0;  // Make the container focusable
     
-    // Add instructions for keyboard controls
-    const controlsHelp = document.querySelector('.controls-help p');
-    controlsHelp.innerHTML = 'Mouse controls: Left-click + drag to rotate, Right-click + drag to pan, Scroll to zoom<br>Keyboard controls: WASD to fly, SHIFT to fly faster';
 }
 
 // Process keyboard movement in the animation loop
@@ -825,27 +822,6 @@ function addResetViewButton() {
     resetButton.addEventListener('click', resetCameraView);
 }
 
-// Add visual keyboard controls info to the UI
-function addKeyboardControlsInfo() {
-    const keysDiv = document.createElement('div');
-    keysDiv.className = 'keyboard-controls';
-    keysDiv.innerHTML = `
-        <div class="key-row">
-            <span class="key">W</span>
-        </div>
-        <div class="key-row">
-            <span class="key">A</span>
-            <span class="key">S</span>
-            <span class="key">D</span>
-        </div>
-        <div class="key-info">Fly with WASD + SHIFT for speed</div>
-    `;
-    
-    // Add to DOM
-    const container = document.getElementById('reset-view-btn');
-    container.parentNode.insertBefore(keysDiv, container.nextSibling);
-}
-
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize 3D scene
@@ -857,9 +833,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add UI controls
     addResetViewButton();
     
-    // Add keyboard controls instructions to the UI
-    addKeyboardControlsInfo();
-    
+     
     // Add event listeners
     window.addEventListener('resize', onWindowResize);
     
