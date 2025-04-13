@@ -668,22 +668,33 @@ function adjustCameraView() {
 function setupKeyboardControls() {
     // Track key down events
     document.addEventListener('keydown', (event) => {
-        // Only process keys if the visualization container is focused
-        const container = document.getElementById('visualization-container');
-        if (!document.activeElement || !container.contains(document.activeElement)) {
-            container.focus();
-        }
+        // Check if user is typing in an input field (like the people-count field)
+        const activeElement = document.activeElement;
+        const isInputField = activeElement && (
+            activeElement.tagName === 'INPUT' || 
+            activeElement.tagName === 'TEXTAREA' || 
+            activeElement.isContentEditable
+        );
+        
+        // Only process movement keys if not typing in an input field
+        if (!isInputField) {
+            // Only process keys if the visualization container is focused
+            const container = document.getElementById('visualization-container');
+            if (!document.activeElement || !container.contains(document.activeElement)) {
+                container.focus();
+            }
 
-        switch(event.key.toLowerCase()) {
-            case 'w': keyState.w = true; break;
-            case 'a': keyState.a = true; break;
-            case 's': keyState.s = true; break;
-            case 'd': keyState.d = true; break;
-            case 'shift': keyState.shift = true; break;
+            switch(event.key.toLowerCase()) {
+                case 'w': keyState.w = true; break;
+                case 'a': keyState.a = true; break;
+                case 's': keyState.s = true; break;
+                case 'd': keyState.d = true; break;
+                case 'shift': keyState.shift = true; break;
+            }
         }
     });
 
-    // Track key up events
+    // Track key up events - always process these to prevent keys getting "stuck"
     document.addEventListener('keyup', (event) => {
         switch(event.key.toLowerCase()) {
             case 'w': keyState.w = false; break;
@@ -698,6 +709,11 @@ function setupKeyboardControls() {
     const container = document.getElementById('visualization-container');
     container.tabIndex = 0;  // Make the container focusable
     
+    // Add instructions for keyboard controls
+    const controlsHelp = document.querySelector('.controls-help p');
+    if (controlsHelp) {
+        controlsHelp.innerHTML = 'Mouse controls: Left-click + drag to rotate, Right-click + drag to pan, Scroll to zoom<br>Keyboard controls: WASD to fly, SHIFT to fly faster';
+    }
 }
 
 // Process keyboard movement in the animation loop
