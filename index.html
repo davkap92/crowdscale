@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stadium Visualizer - Large Numbers</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- D3.js -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- Three.js for 3D visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/OBJLoader.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Stadium Visualizer</h1>
+            <p>Visualize large numbers of people using 100,000-person capacity stadiums</p>
+        </header>
+        
+        <div class="input-section">
+            <label for="people-count">Enter number of people:</label>
+            <input type="number" id="people-count" min="1" value="1000000" placeholder="Enter a number">
+            <button id="visualize-btn">Visualize</button>
+        </div>
+        
+        <div class="presets">
+            <span>Presets:</span>
+            <button class="preset-btn" data-value="100000">100K</button>
+            <button class="preset-btn" data-value="1000000">1 Million</button>
+            <button class="preset-btn" data-value="10000000">10 Million</button>
+            <button class="preset-btn" data-value="100000000">100 Million</button>
+            <button class="preset-btn" data-value="1000000000">1 Billion</button>
+        </div>
+        
+        <div class="info-panel">
+            <div id="stadiums-count">Stadiums: 0</div>
+            <div id="people-total">People: 0</div>
+            <div id="scale-info">Scale: Each stadium = 100,000 people</div>
+        </div>
+        
+        <div id="visualization-container"></div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-icon crowd-icon"></div>
+                <span>Each stadium contains 100,000 people</span>
+            </div>
+        </div>
+        
+        <div class="controls-help">
+            <p>Mouse controls: Left-click + drag to rotate, Right-click + drag to pan, Scroll to zoom</p>
+            <div class="keyboard-controls">
+                <div class="key-row">
+                    <div class="key">W</div>
+                </div>
+                <div class="key-row">
+                    <div class="key">A</div>
+                    <div class="key">S</div>
+                    <div class="key">D</div>
+                </div>
+                <div class="key-info">WASD to fly + Shift for speed</div>
+            </div>
+            <p class="performance-note">Note: For extremely large numbers, the visualization may become slower to render.</p>
+        </div>
+        
+        <div class="about-section">
+            <h3>About This Visualization</h3>
+            <p>This visualization helps you grasp large numbers by representing people in stadium-sized units. Each stadium holds 100,000 people.</p>
+            <p>The 3D view allows you to explore the stadiums from any angle, giving a better sense of scale for large populations.</p>
+            <p>The actual count is always accurate in the information panel above.</p>
+        </div>
+    </div>
+    
+    <script src="scripts.js"></script>
+</body>
+</html>
