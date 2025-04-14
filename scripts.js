@@ -119,9 +119,7 @@ function loadCrowdTexture() {
     return new Promise((resolve) => {
         // Alternative crowd image options in case one fails
         const imageOptions = [
-            'https://images.unsplash.com/photo-1558151748-f2621b5e52f0?q=80&w=1024&auto=format&fit=crop',
-            'https://images.unsplash.com/photo-1578269030234-f4e465f9fe6e?q=80&w=1024&auto=format&fit=crop',
-            'https://images.unsplash.com/photo-1474224017046-182ece80b263?q=80&w=1024&auto=format&fit=crop'
+            'https://i.imgur.com/RGDUdhu.png',
         ];
         
         // Try to load the primary image
@@ -147,15 +145,15 @@ function loadCrowdTexture() {
                 (texture) => {
                     console.log('Crowd texture loaded successfully');
                     
-                    // Apply advanced texture settings
+                    // Apply advanced texture settings for proper wrapping
                     texture.wrapS = THREE.RepeatWrapping;
                     texture.wrapT = THREE.RepeatWrapping;
                     
-                    // Increase texture repetition for more crowd density
-                    texture.repeat.set(8, 3);
+                    // Default repetition - will be adjusted per stadium
+                    texture.repeat.set(6, 2);
                     
-                    // Apply texture offset to avoid repetition patterns
-                    texture.offset.set(0.25, 0.1);
+                    // Starting offset - will be randomized per stadium
+                    texture.offset.set(0, 0);
                     
                     // Enable anisotropic filtering for sharper textures at angles
                     // Make sure renderer exists before accessing its capabilities
@@ -228,7 +226,7 @@ function createStadiumTemplates() {
             map: crowdTexture || null,
             roughness: 0.9,
             metalness: 0.0,
-            side: THREE.DoubleSide,
+            side: THREE.BackSide, // Use BackSide rendering to show texture on inside of cylinder
             // Enhanced material properties for crowd
             emissive: 0x111111,
             emissiveIntensity: 0.1, // Subtle glow to represent stadium lighting on people
@@ -242,7 +240,7 @@ function createStadiumTemplates() {
         base: new THREE.CylinderGeometry(100, 110, 20, 32),
         bowl: new THREE.CylinderGeometry(95, 105, 40, 32, 5, true),
         field: new THREE.CircleGeometry(70, 32),
-        stands: new THREE.CylinderGeometry(75, 102, 30, 32, 16, true), // Increased segments for better texture mapping
+        stands: new THREE.CylinderGeometry(95, 78, 30, 32, 16, true),
         pole: new THREE.CylinderGeometry(1, 1, 80, 6),
         fixture: new THREE.BoxGeometry(10, 5, 10)
     };
@@ -252,7 +250,7 @@ function createStadiumTemplates() {
         base: new THREE.CylinderGeometry(100, 110, 20, 16),
         bowl: new THREE.CylinderGeometry(95, 105, 40, 16, 3, true),
         field: new THREE.CircleGeometry(70, 16),
-        stands: new THREE.CylinderGeometry(75, 102, 30, 16, 8, true), // Increased segments for better texture mapping
+        stands: new THREE.CylinderGeometry(95, 78, 30, 16, 8, true),
         pole: new THREE.CylinderGeometry(1, 1, 80, 4),
         fixture: new THREE.BoxGeometry(10, 5, 10)
     };
@@ -262,7 +260,7 @@ function createStadiumTemplates() {
         base: new THREE.CylinderGeometry(100, 110, 20, 8),
         bowl: new THREE.CylinderGeometry(95, 105, 40, 8, 1, true),
         field: new THREE.CircleGeometry(70, 8),
-        stands: new THREE.CylinderGeometry(75, 102, 30, 8, 4, true), // Increased segments for better texture mapping
+        stands: new THREE.CylinderGeometry(95, 78, 30, 8, 4, true),
         pole: null, // No poles for low detail
         fixture: null // No fixtures for low detail
     };
@@ -325,8 +323,8 @@ function createStadiumModel(detailLevel = STADIUM_DETAIL_LEVELS.HIGH) {
             // Add slight random variation to texture offset for each stadium
             // This prevents all stadiums from having identical crowd patterns
             if (crowdMaterial.map) {
-                const randomU = Math.random() * 0.5;
-                const randomV = Math.random() * 0.5;
+                const randomU = Math.random() * 0.3;
+                const randomV = Math.random() * 0.2;
                 
                 // Clone the texture to avoid affecting other stadiums
                 crowdMaterial.map = crowdMaterial.map.clone();
@@ -335,24 +333,34 @@ function createStadiumModel(detailLevel = STADIUM_DETAIL_LEVELS.HIGH) {
                 // Set new offsets
                 crowdMaterial.map.offset.set(randomU, randomV);
                 
-                // Slightly adjust the repeat based on detail level
+                // Improved texture repeating based on detail level and cylinder size
+                // This creates more realistic crowd patterns around the stadium
                 if (detailLevel === STADIUM_DETAIL_LEVELS.HIGH) {
-                    crowdMaterial.map.repeat.set(8, 3); // More detail for close stadiums
+                    // More horizontal repeats to wrap around the cylinder circumference
+                    // Fewer vertical repeats to match the cylinder height
+                    crowdMaterial.map.repeat.set(12, 2); // More detail for close stadiums
                 } else if (detailLevel === STADIUM_DETAIL_LEVELS.MEDIUM) {
-                    crowdMaterial.map.repeat.set(6, 2); // Medium detail
+                    crowdMaterial.map.repeat.set(8, 1.5); // Medium detail
                 } else {
-                    crowdMaterial.map.repeat.set(4, 1); // Less detail for far stadiums
+                    crowdMaterial.map.repeat.set(6, 1); // Less detail for far stadiums
                 }
             }
             
             // Create stands with crowd texture
             const stands = new THREE.Mesh(geometries.stands, crowdMaterial);
-            stands.position.y = 30;
+            
+            // Position the stands to align with the bowl - adjusted for the inverted geometry
+            stands.position.y = 35;
+            
+            // Since we're using an inverted cone (larger at top, smaller at bottom),
+            // we need to flip the material to show the crowd on the inside
+            crowdMaterial.side = THREE.BackSide;
+            
             stands.castShadow = detailLevel === STADIUM_DETAIL_LEVELS.HIGH;
             stands.receiveShadow = detailLevel === STADIUM_DETAIL_LEVELS.HIGH;
             
             // Add a slight rotation to the stands for better texture alignment
-            stands.rotation.y = Math.PI * 0.25;
+            stands.rotation.y = Math.PI * 0.35;
             
             stadium.add(stands);
         } catch (e) {
@@ -363,11 +371,11 @@ function createStadiumModel(detailLevel = STADIUM_DETAIL_LEVELS.HIGH) {
                 color: 0xe74c3c,
                 roughness: 0.9,
                 metalness: 0.1,
-                side: THREE.DoubleSide
+                side: THREE.BackSide // Use BackSide for the inverted geometry
             });
             
             const stands = new THREE.Mesh(geometries.stands, fallbackMaterial);
-            stands.position.y = 30;
+            stands.position.y = 35;
             stadium.add(stands);
         }
     }
