@@ -552,8 +552,13 @@ function createStadiums(numberOfPeople) {
             const labelInterval = (numberOfStadiums <= 100 ? 1 : 
                              numberOfStadiums <= 300 ? 3 : 
                              numberOfStadiums <= 600 ? 10 : 20);
+            
+            // Determine if this stadium is in the last row
+            const totalRows = Math.ceil(stadiumsToRender / effectiveGridSize);
+            const isInLastRow = (row === totalRows - 1);
                                    
-            if (i % labelInterval === 0 || i === 0 || i === stadiumsToRender - 1) {
+            // Add label if it's the first, last, on interval, in first row, or in last row
+            if (i % labelInterval === 0 || i === 0 || i === stadiumsToRender - 1 || row === 0 || isInLastRow) {
                 addStadiumLabel(i + 1, x, z);
             }
         }
@@ -726,20 +731,38 @@ function setupKeyboardControls() {
 
 // Process keyboard movement in the animation loop
 function processKeyboardMovement() {
-    if (!camera || !(keyState.w || keyState.a || keyState.s || keyState.d)) return;
+    if (!camera) return false; // Return false if no camera
     
+    let moved = false; // Flag to track if movement occurred
+
+    if (!(keyState.w || keyState.a || keyState.s || keyState.d)) {
+        return false; // No movement keys pressed
+    }
+
     // Apply sprint multiplier if shift is pressed
     const speed = keyState.shift ? MOVEMENT_SPEED * SPRINT_MULTIPLIER : MOVEMENT_SPEED;
     
-    // Get the camera's forward, right, and up vectors
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+    // Get the camera's forward and right vectors
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    // Calculate RIGHT = FORWARD x UP (instead of UP x FORWARD)
+    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize(); 
+
+    // Project forward vector onto the horizontal plane (XZ)
+    const forwardXZ = new THREE.Vector3(forward.x, 0, forward.z);
     
-    // Calculate movement direction based on key states
+    // Only normalize and use if it's not a zero vector (i.e., not looking straight up/down)
+    if (forwardXZ.lengthSq() > 0.0001) { // Use lengthSq for efficiency, check against small epsilon
+        forwardXZ.normalize();
+    } else {
+        forwardXZ.set(0, 0, 0); // Ensure it's zero if looking vertically
+    }
+    
+    // Calculate movement direction based on key states, using projected forward
     const moveDirection = new THREE.Vector3(0, 0, 0);
     
-    if (keyState.w) moveDirection.add(forward);
-    if (keyState.s) moveDirection.sub(forward);
+    if (keyState.w) moveDirection.add(forwardXZ);
+    if (keyState.s) moveDirection.sub(forwardXZ);
     if (keyState.d) moveDirection.add(right);
     if (keyState.a) moveDirection.sub(right);
     
@@ -749,13 +772,14 @@ function processKeyboardMovement() {
         
         // Update camera position
         camera.position.add(moveDirection);
-        
-        // Update controls target to maintain the same viewing direction
         controls.target.add(moveDirection);
+        moved = true; // Set flag to true as movement happened
         
-        // Update controls
-        controls.update();
+        // Update controls - No need to update target for flying
+        // controls.update(); // controls.update() is called in animate loop anyway
     }
+    
+    return moved; // Return whether movement occurred
 }
 
 // Animation loop - optimized
@@ -773,10 +797,12 @@ function animate(time) {
     frameCount++;
     
     // Process keyboard input for flying
-    processKeyboardMovement();
+    const movedByKey = processKeyboardMovement();
     
-    // Update controls
-    controls.update();
+    // Update controls only if WASD keys were not used in this frame
+    if (!movedByKey) {
+        controls.update();
+    }
     
     // Enforce minimum camera height to prevent going below ground
     enforceCameraConstraints();
