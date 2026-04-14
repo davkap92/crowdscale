@@ -1,6 +1,7 @@
 // Global variables
 let scene, camera, renderer, controls;
 let stadiums = [];
+let stadiumInstances = []; // Track InstancedMesh objects for cleanup
 const STADIUM_CAPACITY = 100000; // Each stadium represents 100,000 people
 const STADIUM_SPACING = 500; // Space between stadiums
 const GRID_SIZE = 20; // Increased maximum stadiums per row for larger grids
@@ -54,8 +55,10 @@ function initScene() {
         document.getElementById('visualization-container').clientHeight
     );
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.BasicShadowMap; // Use basic shadow maps for performance
+    renderer.shadowMap.type = THREE.PCFShadowMap; // Softer shadow edges
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Limit pixel ratio
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // Cinematic color grading
+    renderer.toneMappingExposure = 1.0;
     
     // Add renderer to DOM
     document.getElementById('visualization-container').appendChild(renderer.domElement);
@@ -72,11 +75,14 @@ function initScene() {
     controls.autoRotate = false; // No auto-rotation by default
     controls.autoRotateSpeed = 0.5; // In case auto-rotation is enabled later
     
-    // Add lights - simplified lighting for performance
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Increased ambient light
+    // Hemisphere light provides natural sky/ground color bounce
+    const hemisphereLight = new THREE.HemisphereLight(0x87CEEB, 0x4ca64c, 0.6);
+    scene.add(hemisphereLight);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
     scene.add(ambientLight);
     
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const directionalLight = new THREE.DirectionalLight(0xfffde7, 1.0); // Warm sunlight
     directionalLight.position.set(500, 1000, 500);
     directionalLight.castShadow = true;
     directionalLight.shadow.mapSize.width = 512; // Reduced for performance
@@ -97,8 +103,8 @@ function initScene() {
     gridHelper.name = "initialGrid"; // Give it a name so we can remove it later
     scene.add(gridHelper);
 
-    // Add fog for depth - adjust for better performance
-    scene.fog = new THREE.FogExp2(0xf0f0f0, 0.00025);
+    // Fog matching sky color for seamless horizon blending
+    scene.fog = new THREE.FogExp2(0x87CEEB, 0.00015);
     
     // Load crowd texture - a realistic crowd image
     loadCrowdTexture().then(() => {
@@ -117,73 +123,82 @@ function initScene() {
 // Load the crowd texture from a URL
 function loadCrowdTexture() {
     return new Promise((resolve) => {
-        // Alternative crowd image options in case one fails
-        const imageOptions = [
-            'https://i.imgur.com/RGDUdhu.png',
+        // Generate a procedural crowd texture on a canvas — no network/CORS issues
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width  = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Dark concrete/seat base
+        ctx.fillStyle = '#3a3a4a';
+        ctx.fillRect(0, 0, size, size);
+
+        // Crowd palette — realistic stadium clothing colours
+        const colours = [
+            '#e63946','#d62839','#c1121f', // reds
+            '#1d3557','#457b9d','#a8dadc', // blues
+            '#f4a261','#e76f51','#e9c46a', // oranges/yellows
+            '#2a9d8f','#264653',           // teals
+            '#ffffff','#f1faee',           // whites
+            '#6d6875','#b5838d',           // purples
+            '#606c38','#dda15e',           // greens/tans
         ];
-        
-        // Try to load the primary image
-        const textureLoader = new THREE.TextureLoader();
-        
-        // Add error handling for texture loading
-        const loadTexture = (index) => {
-            if (index >= imageOptions.length) {
-                console.error('All crowd texture options failed to load');
-                // Resolve anyway to allow the app to continue
-                resolve();
-                return;
+
+        const rowCount  = 28;   // horizontal seating rows
+        const colCount  = 52;   // seats per row
+        const headW     = size / colCount;
+        const rowH      = size / rowCount;
+
+        for (let row = 0; row < rowCount; row++) {
+            for (let col = 0; col < colCount; col++) {
+                const cx = (col + 0.5) * headW + (row % 2 === 0 ? 0 : headW * 0.5);
+                const cy = (row + 0.5) * rowH;
+
+                // Pick a random shirt colour, weighted towards the seat colour
+                const colour = colours[Math.floor(Math.random() * colours.length)];
+
+                // Torso / body
+                ctx.fillStyle = colour;
+                const bodyW = headW * 0.72;
+                const bodyH = rowH * 0.55;
+                ctx.beginPath();
+                ctx.ellipse(cx, cy + rowH * 0.18, bodyW / 2, bodyH / 2, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Head — skin tones
+                const skinTones = ['#f5cba7','#e8b88a','#d4956a','#c07850','#8d5524','#5c3317'];
+                ctx.fillStyle = skinTones[Math.floor(Math.random() * skinTones.length)];
+                const headR = headW * 0.25;
+                ctx.beginPath();
+                ctx.arc(cx, cy - rowH * 0.1, headR, 0, Math.PI * 2);
+                ctx.fill();
             }
-            
-            const crowdTextureUrl = imageOptions[index];
-            console.log(`Trying to load crowd texture: ${index + 1}/${imageOptions.length}`);
-            
-            textureLoader.load(
-                // URL
-                crowdTextureUrl,
-                
-                // Success callback
-                (texture) => {
-                    console.log('Crowd texture loaded successfully');
-                    
-                    // Apply advanced texture settings for proper wrapping
-                    texture.wrapS = THREE.RepeatWrapping;
-                    texture.wrapT = THREE.RepeatWrapping;
-                    
-                    // Default repetition - will be adjusted per stadium
-                    texture.repeat.set(6, 2);
-                    
-                    // Starting offset - will be randomized per stadium
-                    texture.offset.set(0, 0);
-                    
-                    // Enable anisotropic filtering for sharper textures at angles
-                    // Make sure renderer exists before accessing its capabilities
-                    if (renderer && renderer.capabilities) {
-                        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-                    }
-                    
-                    // Enable mipmaps for better quality at different distances
-                    texture.generateMipmaps = true;
-                    texture.minFilter = THREE.LinearMipmapLinearFilter;
-                    texture.magFilter = THREE.LinearFilter;
-                    
-                    crowdTexture = texture;
-                    resolve();
-                },
-                
-                // Progress callback - optional
-                undefined,
-                
-                // Error callback
-                (error) => {
-                    console.warn(`Failed to load crowd texture option ${index + 1}:`, error);
-                    // Try the next option
-                    loadTexture(index + 1);
-                }
-            );
-        };
-        
-        // Start loading with the first option
-        loadTexture(0);
+        }
+
+        // Subtle row-separator lines to define seating tiers
+        ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+        ctx.lineWidth = 1;
+        for (let row = 1; row < rowCount; row++) {
+            ctx.beginPath();
+            ctx.moveTo(0, row * rowH);
+            ctx.lineTo(size, row * rowH);
+            ctx.stroke();
+        }
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(6, 2);
+        texture.generateMipmaps = true;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        if (renderer && renderer.capabilities) {
+            texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        }
+
+        crowdTexture = texture;
+        resolve();
     });
 }
 
@@ -226,12 +241,10 @@ function createStadiumTemplates() {
             map: crowdTexture || null,
             roughness: 0.9,
             metalness: 0.0,
-            side: THREE.BackSide, // Use BackSide rendering to show texture on inside of cylinder
-            // Enhanced material properties for crowd
+            side: THREE.BackSide,
             emissive: 0x111111,
-            emissiveIntensity: 0.1, // Subtle glow to represent stadium lighting on people
-            color: crowdTexture ? 0xeeeeee : 0xe74c3c, // Use fallback color if no texture
-            bumpScale: 0.02 // Very subtle bump for crowd texture
+            emissiveIntensity: 0.15,
+            color: 0xffffff, // White so the canvas texture colours render accurately
         })
     };
 
@@ -404,14 +417,25 @@ function createStadiumModel(detailLevel = STADIUM_DETAIL_LEVELS.HIGH) {
     return stadium;
 }
 
-// Position stadiums in a grid layout
+// Position stadiums in a grid layout using InstancedMesh for efficiency
+// Crowd color palette — per-instance crowd tinting for visual variety
+const CROWD_PALETTE = [
+    new THREE.Color(0xff6b6b), // red
+    new THREE.Color(0x6b8cff), // blue
+    new THREE.Color(0xfcd34d), // yellow
+    new THREE.Color(0xff9f43), // orange
+    new THREE.Color(0x48dbfb), // cyan
+    new THREE.Color(0xa78bfa), // purple
+    new THREE.Color(0x34d399), // green
+    new THREE.Color(0xfb7185), // pink
+];
+
 function createStadiums(numberOfPeople) {
     console.time('createStadiums');
     
-    // Clear existing stadiums
-    stadiums.forEach(stadium => {
-        scene.remove(stadium);
-    });
+    // Clear existing instanced meshes
+    stadiumInstances.forEach(mesh => scene.remove(mesh));
+    stadiumInstances = [];
     stadiums = [];
     
     // Clear existing stadium labels
@@ -431,17 +455,14 @@ function createStadiums(numberOfPeople) {
     document.getElementById('stadiums-count').textContent = `Stadiums: ${numberOfStadiums}`;
     document.getElementById('people-total').textContent = `People: ${numberOfPeople.toLocaleString()}`;
     
-    // No stadium limit now - render all stadiums
     const stadiumsToRender = numberOfStadiums;
-    
-    // Adjust grid size based on stadium count for better layout
     const effectiveGridSize = Math.min(GRID_SIZE, Math.ceil(Math.sqrt(stadiumsToRender)));
-    
-    // Create stadium models for different detail levels (reused for efficiency)
-    const highDetailModel = createStadiumModel(STADIUM_DETAIL_LEVELS.HIGH);
-    const mediumDetailModel = createStadiumModel(STADIUM_DETAIL_LEVELS.MEDIUM);
-    const lowDetailModel = createStadiumModel(STADIUM_DETAIL_LEVELS.LOW);
-    
+
+    // LOD counts: first 50 = HIGH, next 150 = MEDIUM, rest = LOW
+    const highCount   = Math.min(stadiumsToRender, 50);
+    const mediumCount = Math.max(0, Math.min(stadiumsToRender - 50, 150));
+    const lowCount    = Math.max(0, stadiumsToRender - 200);
+
     // Calculate the ground size based on number of stadiums
     const rows = Math.ceil(stadiumsToRender / effectiveGridSize);
     const groundSize = Math.max(
@@ -474,101 +495,134 @@ function createStadiums(numberOfPeople) {
     if (existingGrid) {
         scene.remove(existingGrid);
     }
-    
-    const gridHelper = new THREE.GridHelper(groundSize, Math.floor(groundSize/400), 0x000000, 0x000000);
-    gridHelper.position.y = 0.1; // Slightly above ground to prevent z-fighting
+
+    const gridHelper = new THREE.GridHelper(groundSize, Math.floor(groundSize / 400), 0x000000, 0x000000);
+    gridHelper.position.y = 0.1;
     gridHelper.name = "mainGrid";
+    gridHelper.material.opacity = 0.12;
+    gridHelper.material.transparent = true;
     scene.add(gridHelper);
-    
-    // Use batch processing for better performance - process in smaller chunks
-    const batchSize = 20; // Fixed batch size
-    const totalBatches = Math.ceil(stadiumsToRender / batchSize);
-    
-    // Process first batch immediately
-    processBatch(0);
-    
-    // Process remaining batches with delays to avoid blocking the UI
-    for (let batchIndex = 1; batchIndex < totalBatches; batchIndex++) {
-        setTimeout(() => {
-            processBatch(batchIndex);
-            
-            // If this is the last batch, set up camera view
-            if (batchIndex === totalBatches - 1) {
-                adjustCameraView();
-            }
-        }, batchIndex * 10); // Fixed delay between batches
+
+    // Create a set of InstancedMeshes for one LOD level
+    function createInstanceSet(geos, count) {
+        if (count <= 0 || !geos) return null;
+
+        const meshBase   = new THREE.InstancedMesh(geos.base,   stadiumMaterials.base,  count);
+        const meshBowl   = new THREE.InstancedMesh(geos.bowl,   stadiumMaterials.bowl,  count);
+        const meshField  = new THREE.InstancedMesh(geos.field,  stadiumMaterials.field, count);
+        const meshStands = new THREE.InstancedMesh(geos.stands, stadiumMaterials.crowd, count);
+
+        meshBase.castShadow   = meshBase.receiveShadow   = true;
+        meshBowl.castShadow   = meshBowl.receiveShadow   = true;
+        meshField.receiveShadow = true;
+        meshStands.castShadow = meshStands.receiveShadow = true;
+
+        const set = [meshBase, meshBowl, meshField, meshStands];
+
+        // Light poles only for HIGH detail
+        if (geos.pole && geos.fixture) {
+            const meshPole    = new THREE.InstancedMesh(geos.pole,    stadiumMaterials.pole,    count * 2);
+            const meshFixture = new THREE.InstancedMesh(geos.fixture, stadiumMaterials.fixture, count * 2);
+            meshPole.castShadow    = true;
+            meshFixture.castShadow = true;
+            set.push(meshPole, meshFixture);
+        }
+
+        set.forEach(m => { scene.add(m); stadiumInstances.push(m); });
+        return set;
     }
-    
-    function processBatch(batchIndex) {
-        const startIndex = batchIndex * batchSize;
-        const endIndex = Math.min(startIndex + batchSize, stadiumsToRender);
-        
-        for (let i = startIndex; i < endIndex; i++) {
-            // Determine detail level based on position in the grid
-            let detailLevel;
-            if (i < 50) {
-                detailLevel = STADIUM_DETAIL_LEVELS.HIGH;
-            } else if (i < 200) {
-                detailLevel = STADIUM_DETAIL_LEVELS.MEDIUM;
-            } else {
-                detailLevel = STADIUM_DETAIL_LEVELS.LOW;
-            }
-            
-            // Use the appropriate model based on detail level
-            let stadiumModel;
-            switch (detailLevel) {
-                case STADIUM_DETAIL_LEVELS.HIGH:
-                    stadiumModel = highDetailModel.clone();
-                    break;
-                case STADIUM_DETAIL_LEVELS.MEDIUM:
-                    stadiumModel = mediumDetailModel.clone();
-                    break;
-                default:
-                    stadiumModel = lowDetailModel.clone();
-            }
-            
-            // Calculate stadium capacity
-            const stadiumCapacity = (i === numberOfStadiums - 1 && numberOfPeople % STADIUM_CAPACITY !== 0) 
-                ? numberOfPeople % STADIUM_CAPACITY 
-                : STADIUM_CAPACITY;
-            
-            // Calculate grid position using a square grid pattern
-            const row = Math.floor(i / effectiveGridSize);
-            const col = i % effectiveGridSize;
-            
-            // Calculate 3D position
-            const x = (col - Math.floor(effectiveGridSize / 2)) * STADIUM_SPACING;
-            const z = (row - Math.floor(stadiumsToRender / effectiveGridSize / 2)) * STADIUM_SPACING;
-            
-            stadiumModel.position.set(x, 0, z);
-            stadiumModel.userData = { index: i + 1 }; // Store stadium number for raycasting
-            
-            // Add to scene and store reference
-            scene.add(stadiumModel);
-            stadiums.push(stadiumModel);
-            
-            // Add stadium number label (simplified)
-            // Only add labels to a subset of stadiums based on how many we have
-            const labelInterval = (numberOfStadiums <= 100 ? 1 : 
-                             numberOfStadiums <= 300 ? 3 : 
-                             numberOfStadiums <= 600 ? 10 : 20);
-            
-            // Determine if this stadium is in the last row
-            const totalRows = Math.ceil(stadiumsToRender / effectiveGridSize);
-            const isInLastRow = (row === totalRows - 1);
-                                   
-            // Add label if it's the first, last, on interval, in first row, or in last row
-            if (i % labelInterval === 0 || i === 0 || i === stadiumsToRender - 1 || row === 0 || isInLastRow) {
-                addStadiumLabel(i + 1, x, z);
+
+    const highSet   = createInstanceSet(stadiumGeometries.high,   highCount);
+    const mediumSet = createInstanceSet(stadiumGeometries.medium, mediumCount);
+    const lowSet    = createInstanceSet(stadiumGeometries.low,    lowCount);
+
+    // Reusable dummy Object3D for matrix calculation
+    const dummy = new THREE.Object3D();
+
+    const labelInterval = stadiumsToRender <= 100 ? 1 :
+                          stadiumsToRender <= 300 ? 3 :
+                          stadiumsToRender <= 600 ? 10 : 20;
+    const totalRows = Math.ceil(stadiumsToRender / effectiveGridSize);
+
+    for (let i = 0; i < stadiumsToRender; i++) {
+        const row = Math.floor(i / effectiveGridSize);
+        const col = i % effectiveGridSize;
+        const x = (col - Math.floor(effectiveGridSize / 2)) * STADIUM_SPACING;
+        const z = (row - Math.floor(stadiumsToRender / effectiveGridSize / 2)) * STADIUM_SPACING;
+
+        let set, localIndex;
+        if (i < highCount) {
+            set = highSet;   localIndex = i;
+        } else if (i < highCount + mediumCount) {
+            set = mediumSet; localIndex = i - highCount;
+        } else {
+            set = lowSet;    localIndex = i - highCount - mediumCount;
+        }
+
+        if (!set) { stadiums.push(null); continue; }
+
+        // Base (y = 10)
+        dummy.position.set(x, 10, z);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        set[0].setMatrixAt(localIndex, dummy.matrix);
+
+        // Bowl (y = 40)
+        dummy.position.set(x, 40, z);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        set[1].setMatrixAt(localIndex, dummy.matrix);
+
+        // Field (rotated flat, y = 21)
+        dummy.position.set(x, 21, z);
+        dummy.rotation.set(-Math.PI / 2, 0, 0);
+        dummy.updateMatrix();
+        set[2].setMatrixAt(localIndex, dummy.matrix);
+
+        // Stands (y = 35, slight Y rotation)
+        dummy.position.set(x, 35, z);
+        dummy.rotation.set(0, Math.PI * 0.35, 0);
+        dummy.updateMatrix();
+        set[3].setMatrixAt(localIndex, dummy.matrix);
+
+        // White instance color so the canvas crowd texture renders with its true colours
+        set[3].setColorAt(localIndex, new THREE.Color(0xffffff));
+
+        // Light poles — HIGH detail only (set indices 4 & 5)
+        if (set.length > 4) {
+            for (let p = 0; p < 2; p++) {
+                const angle = p * Math.PI;
+                const px = x + Math.cos(angle) * 105;
+                const pz = z + Math.sin(angle) * 105;
+
+                dummy.position.set(px, 60, pz);
+                dummy.rotation.set(0, 0, 0);
+                dummy.updateMatrix();
+                set[4].setMatrixAt(localIndex * 2 + p, dummy.matrix);
+
+                dummy.position.set(px, 100, pz);
+                dummy.updateMatrix();
+                set[5].setMatrixAt(localIndex * 2 + p, dummy.matrix);
             }
         }
+
+        // Track count for adjustCameraView
+        stadiums.push(null);
+
+        // Labels
+        const isInLastRow = row === totalRows - 1;
+        if (i % labelInterval === 0 || i === 0 || i === stadiumsToRender - 1 || row === 0 || isInLastRow) {
+            addStadiumLabel(i + 1, x, z);
+        }
     }
-    
-    // If there are very few stadiums, adjust camera view immediately
-    if (stadiumsToRender <= batchSize) {
-        adjustCameraView();
-    }
-    
+
+    // Commit all instance data to GPU
+    stadiumInstances.forEach(m => {
+        m.instanceMatrix.needsUpdate = true;
+        if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    });
+
+    adjustCameraView();
     console.timeEnd('createStadiums');
 }
 
@@ -598,7 +652,8 @@ function addStadiumLabel(number, x, z) {
 
 // Update label positions in 3D space - optimized version
 function updateLabels() {
-    // Update labels every frame
+    // Throttle to every 3rd frame to reduce DOM overhead
+    if (frameCount % 3 !== 0) return;
     const labels = document.getElementsByClassName('stadium-label');
     if (labels.length === 0) return;
     
