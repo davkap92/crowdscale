@@ -5,7 +5,14 @@ let stadiumInstances = []; // Track InstancedMesh objects for cleanup
 const STADIUM_CAPACITY = 100000; // Each stadium represents 100,000 people
 const STADIUM_SPACING = 500; // Space between stadiums
 const GRID_SIZE = 20; // Increased maximum stadiums per row for larger grids
-const PEOPLE_PER_DOT = 5000; // Each dot represents 5000 people (increased for performance)
+const MAX_RENDERED_STADIUMS = 10000;
+const WHITE_INSTANCE_COLOR = new THREE.Color(0xffffff);
+const labelWorldPosition = new THREE.Vector3();
+const labelCameraPosition = new THREE.Vector3();
+const keyboardForward = new THREE.Vector3();
+const keyboardRight = new THREE.Vector3();
+const keyboardForwardXZ = new THREE.Vector3();
+const keyboardMoveDirection = new THREE.Vector3();
 const STADIUM_DETAIL_LEVELS = {
     HIGH: 0,    // Full detail for close stadiums
     MEDIUM: 1,  // Medium detail for medium distance
@@ -27,6 +34,9 @@ const SPRINT_MULTIPLIER = 3; // Speed multiplier when shift is pressed
 let stadiumGeometries = {};
 let stadiumMaterials = {};
 let crowdTexture; // Single crowd texture
+let templatesReady = false;
+let pendingPeopleCount = null;
+let lastFrameTime = 0;
 
 // Initialize the 3D scene
 function initScene() {
@@ -55,6 +65,7 @@ function initScene() {
         document.getElementById('visualization-container').clientHeight
     );
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.autoUpdate = false;
     renderer.shadowMap.type = THREE.PCFShadowMap; // Softer shadow edges
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Limit pixel ratio
     renderer.toneMapping = THREE.ACESFilmicToneMapping; // Cinematic color grading
@@ -110,9 +121,11 @@ function initScene() {
     loadCrowdTexture().then(() => {
         // Pre-create stadium geometries and materials for different detail levels
         createStadiumTemplates();
+        templatesReady = true;
         
         // Initialize with default value after textures are loaded
-        const defaultPeopleCount = parseInt(document.getElementById('people-count').value);
+        const defaultPeopleCount = pendingPeopleCount || parseInt(document.getElementById('people-count').value, 10);
+        pendingPeopleCount = null;
         createStadiums(defaultPeopleCount);
     });
 
@@ -194,7 +207,7 @@ function loadCrowdTexture() {
         texture.minFilter = THREE.LinearMipmapLinearFilter;
         texture.magFilter = THREE.LinearFilter;
         if (renderer && renderer.capabilities) {
-            texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+            texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4);
         }
 
         crowdTexture = texture;
@@ -277,6 +290,21 @@ function createStadiumTemplates() {
         pole: null, // No poles for low detail
         fixture: null // No fixtures for low detail
     };
+}
+
+function disposeSceneObject(object) {
+    scene.remove(object);
+    if (object.geometry) {
+        object.geometry.dispose();
+    }
+
+    if (object.material) {
+        if (Array.isArray(object.material)) {
+            object.material.forEach(material => material.dispose());
+        } else {
+            object.material.dispose();
+        }
+    }
 }
 
 // Create a stadium with the appropriate level of detail
@@ -417,21 +445,11 @@ function createStadiumModel(detailLevel = STADIUM_DETAIL_LEVELS.HIGH) {
     return stadium;
 }
 
-// Position stadiums in a grid layout using InstancedMesh for efficiency
-// Crowd color palette — per-instance crowd tinting for visual variety
-const CROWD_PALETTE = [
-    new THREE.Color(0xff6b6b), // red
-    new THREE.Color(0x6b8cff), // blue
-    new THREE.Color(0xfcd34d), // yellow
-    new THREE.Color(0xff9f43), // orange
-    new THREE.Color(0x48dbfb), // cyan
-    new THREE.Color(0xa78bfa), // purple
-    new THREE.Color(0x34d399), // green
-    new THREE.Color(0xfb7185), // pink
-];
-
 function createStadiums(numberOfPeople) {
-    console.time('createStadiums');
+    if (!templatesReady) {
+        pendingPeopleCount = numberOfPeople;
+        return;
+    }
     
     // Clear existing instanced meshes
     stadiumInstances.forEach(mesh => scene.remove(mesh));
@@ -447,15 +465,19 @@ function createStadiums(numberOfPeople) {
     // Remove initial grid if it exists
     const initialGrid = scene.getObjectByName("initialGrid");
     if (initialGrid) {
-        scene.remove(initialGrid);
+        disposeSceneObject(initialGrid);
     }
     
     // Calculate how many stadiums we need
     const numberOfStadiums = Math.ceil(numberOfPeople / STADIUM_CAPACITY);
-    document.getElementById('stadiums-count').textContent = `Stadiums: ${numberOfStadiums}`;
+    const stadiumsToRender = Math.min(numberOfStadiums, MAX_RENDERED_STADIUMS);
+    const renderLimitText = numberOfStadiums > stadiumsToRender
+        ? ` (showing ${stadiumsToRender.toLocaleString()})`
+        : '';
+
+    document.getElementById('stadiums-count').textContent = `Stadiums: ${numberOfStadiums.toLocaleString()}${renderLimitText}`;
     document.getElementById('people-total').textContent = `People: ${numberOfPeople.toLocaleString()}`;
     
-    const stadiumsToRender = numberOfStadiums;
     const effectiveGridSize = Math.min(GRID_SIZE, Math.ceil(Math.sqrt(stadiumsToRender)));
 
     // LOD counts: first 50 = HIGH, next 150 = MEDIUM, rest = LOW
@@ -465,20 +487,18 @@ function createStadiums(numberOfPeople) {
 
     // Calculate the ground size based on number of stadiums
     const rows = Math.ceil(stadiumsToRender / effectiveGridSize);
-    const groundSize = Math.max(
-        10000, // Minimum base size
-        (effectiveGridSize + 2) * STADIUM_SPACING, // Width with margin
-        (rows + 2) * STADIUM_SPACING // Length with margin
-    );
+    const groundWidth  = (effectiveGridSize + 1) * STADIUM_SPACING;
+    const groundLength = (rows + 1) * STADIUM_SPACING;
+    const groundSize   = Math.max(groundWidth, groundLength);
     
     // Remove old ground if it exists (find by name)
     const existingGround = scene.getObjectByName("ground");
     if (existingGround) {
-        scene.remove(existingGround);
+        disposeSceneObject(existingGround);
     }
     
     // Create new ground plane that fits all stadiums
-    const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize);
+    const groundGeometry = new THREE.PlaneGeometry(groundWidth, groundLength);
     const groundMaterial = new THREE.MeshStandardMaterial({ 
         color: 0x4ca64c,
         roughness: 0.8,
@@ -493,7 +513,7 @@ function createStadiums(numberOfPeople) {
     // Update the grid helper to match ground size
     const existingGrid = scene.getObjectByName("mainGrid");
     if (existingGrid) {
-        scene.remove(existingGrid);
+        disposeSceneObject(existingGrid);
     }
 
     const gridHelper = new THREE.GridHelper(groundSize, Math.floor(groundSize / 400), 0x000000, 0x000000);
@@ -504,18 +524,20 @@ function createStadiums(numberOfPeople) {
     scene.add(gridHelper);
 
     // Create a set of InstancedMeshes for one LOD level
-    function createInstanceSet(geos, count) {
+    function createInstanceSet(geos, count, castsShadows) {
         if (count <= 0 || !geos) return null;
 
         const meshBase   = new THREE.InstancedMesh(geos.base,   stadiumMaterials.base,  count);
         const meshBowl   = new THREE.InstancedMesh(geos.bowl,   stadiumMaterials.bowl,  count);
         const meshField  = new THREE.InstancedMesh(geos.field,  stadiumMaterials.field, count);
         const meshStands = new THREE.InstancedMesh(geos.stands, stadiumMaterials.crowd, count);
+        meshBase.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        meshBowl.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        meshField.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        meshStands.instanceMatrix.setUsage(THREE.StaticDrawUsage);
 
-        meshBase.castShadow   = meshBase.receiveShadow   = true;
-        meshBowl.castShadow   = meshBowl.receiveShadow   = true;
-        meshField.receiveShadow = true;
-        meshStands.castShadow = meshStands.receiveShadow = true;
+        meshBase.castShadow = meshBowl.castShadow = meshStands.castShadow = castsShadows;
+        meshBase.receiveShadow = meshBowl.receiveShadow = meshField.receiveShadow = meshStands.receiveShadow = castsShadows;
 
         const set = [meshBase, meshBowl, meshField, meshStands];
 
@@ -523,8 +545,10 @@ function createStadiums(numberOfPeople) {
         if (geos.pole && geos.fixture) {
             const meshPole    = new THREE.InstancedMesh(geos.pole,    stadiumMaterials.pole,    count * 2);
             const meshFixture = new THREE.InstancedMesh(geos.fixture, stadiumMaterials.fixture, count * 2);
-            meshPole.castShadow    = true;
-            meshFixture.castShadow = true;
+            meshPole.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+            meshFixture.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+            meshPole.castShadow = castsShadows;
+            meshFixture.castShadow = castsShadows;
             set.push(meshPole, meshFixture);
         }
 
@@ -532,23 +556,24 @@ function createStadiums(numberOfPeople) {
         return set;
     }
 
-    const highSet   = createInstanceSet(stadiumGeometries.high,   highCount);
-    const mediumSet = createInstanceSet(stadiumGeometries.medium, mediumCount);
-    const lowSet    = createInstanceSet(stadiumGeometries.low,    lowCount);
+    const highSet   = createInstanceSet(stadiumGeometries.high,   highCount, true);
+    const mediumSet = createInstanceSet(stadiumGeometries.medium, mediumCount, false);
+    const lowSet    = createInstanceSet(stadiumGeometries.low,    lowCount, false);
 
     // Reusable dummy Object3D for matrix calculation
     const dummy = new THREE.Object3D();
 
-    const labelInterval = stadiumsToRender <= 100 ? 1 :
-                          stadiumsToRender <= 300 ? 3 :
-                          stadiumsToRender <= 600 ? 10 : 20;
+    // Hard cap of 30 labels regardless of stadium count, always include #1 and #last
+    const MAX_LABELS = 30;
+    const labelInterval = Math.ceil(stadiumsToRender / MAX_LABELS);
     const totalRows = Math.ceil(stadiumsToRender / effectiveGridSize);
+    const labelFragment = document.createDocumentFragment();
 
     for (let i = 0; i < stadiumsToRender; i++) {
         const row = Math.floor(i / effectiveGridSize);
         const col = i % effectiveGridSize;
         const x = (col - Math.floor(effectiveGridSize / 2)) * STADIUM_SPACING;
-        const z = (row - Math.floor(stadiumsToRender / effectiveGridSize / 2)) * STADIUM_SPACING;
+        const z = (row - Math.floor(totalRows / 2)) * STADIUM_SPACING;
 
         let set, localIndex;
         if (i < highCount) {
@@ -586,7 +611,7 @@ function createStadiums(numberOfPeople) {
         set[3].setMatrixAt(localIndex, dummy.matrix);
 
         // White instance color so the canvas crowd texture renders with its true colours
-        set[3].setColorAt(localIndex, new THREE.Color(0xffffff));
+        set[3].setColorAt(localIndex, WHITE_INSTANCE_COLOR);
 
         // Light poles — HIGH detail only (set indices 4 & 5)
         if (set.length > 4) {
@@ -609,12 +634,13 @@ function createStadiums(numberOfPeople) {
         // Track count for adjustCameraView
         stadiums.push(null);
 
-        // Labels
-        const isInLastRow = row === totalRows - 1;
-        if (i % labelInterval === 0 || i === 0 || i === stadiumsToRender - 1 || row === 0 || isInLastRow) {
-            addStadiumLabel(i + 1, x, z);
+        // Labels: evenly spaced up to MAX_LABELS, always include first and last
+        if (i === 0 || i === stadiumsToRender - 1 || i % labelInterval === 0) {
+            addStadiumLabel(i + 1, x, z, labelFragment);
         }
     }
+
+    document.getElementById('visualization-container').appendChild(labelFragment);
 
     // Commit all instance data to GPU
     stadiumInstances.forEach(m => {
@@ -623,15 +649,21 @@ function createStadiums(numberOfPeople) {
     });
 
     adjustCameraView();
-    console.timeEnd('createStadiums');
+    renderer.shadowMap.needsUpdate = true;
 }
 
 // Add text labels above stadiums
-function addStadiumLabel(number, x, z) {
+function formatStadiumLabel(n) {
+    if (n >= 1000000) return `#${(n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1)}M`;
+    if (n >= 1000)    return `#${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}K`;
+    return `#${n}`;
+}
+
+function addStadiumLabel(number, x, z, parent) {
     // Create a div element for the label
     const labelDiv = document.createElement('div');
     labelDiv.className = 'stadium-label';
-    labelDiv.textContent = `#${number}`; // Simplified label
+    labelDiv.textContent = formatStadiumLabel(number);
     labelDiv.style.position = 'absolute';
     labelDiv.style.color = 'white';
     labelDiv.style.padding = '4px 8px';
@@ -642,7 +674,7 @@ function addStadiumLabel(number, x, z) {
     labelDiv.style.userSelect = 'none';
     
     // Add to DOM
-    document.getElementById('visualization-container').appendChild(labelDiv);
+    parent.appendChild(labelDiv);
     
     // Store the 3D position for updating in render loop
     labelDiv.dataset.x = x;
@@ -657,29 +689,29 @@ function updateLabels() {
     const labels = document.getElementsByClassName('stadium-label');
     if (labels.length === 0) return;
     
-    const cameraPosition = camera.position.clone();
+    labelCameraPosition.copy(camera.position);
     
     for (let i = 0; i < labels.length; i++) {
         const label = labels[i];
-        const position = new THREE.Vector3(
+        labelWorldPosition.set(
             parseFloat(label.dataset.x),
             parseFloat(label.dataset.y),
             parseFloat(label.dataset.z)
         );
         
-        // Skip updating labels that are far from camera for performance
-        const distanceThreshold = 5000;
-        if (position.distanceTo(cameraPosition) > distanceThreshold) {
+        // Distance threshold scales with how far back the camera is
+        const distanceThreshold = Math.max(5000, labelCameraPosition.length() * 0.9);
+        if (labelWorldPosition.distanceTo(labelCameraPosition) > distanceThreshold) {
             label.style.display = 'none';
             continue;
         }
         
         // Project 3D position to 2D screen position
-        position.project(camera);
+        labelWorldPosition.project(camera);
         
         // Convert to CSS coordinates
-        const x = (position.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
-        const y = (-position.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
+        const x = (labelWorldPosition.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
+        const y = (-labelWorldPosition.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
         
         // Set label position
         label.style.transform = `translate(-50%, -50%)`;
@@ -687,7 +719,7 @@ function updateLabels() {
         label.style.top = `${y}px`;
         
         // Hide labels that are behind the camera
-        label.style.display = position.z < 1 ? 'block' : 'none';
+        label.style.display = labelWorldPosition.z < 1 ? 'block' : 'none';
     }
 }
 
@@ -705,9 +737,11 @@ function adjustCameraView() {
     const gridSize = Math.min(GRID_SIZE, Math.ceil(Math.sqrt(numberOfStadiums)));
     const rows = Math.ceil(numberOfStadiums / gridSize);
     
-    // Get the actual ground size from the scene
+    // Get the actual ground size from the scene (use the larger dimension)
     const ground = scene.getObjectByName("ground");
-    const groundSize = ground ? ground.geometry.parameters.width : 10000;
+    const groundSize = ground
+        ? Math.max(ground.geometry.parameters.width, ground.geometry.parameters.height)
+        : 5000;
     
     // Calculate appropriate camera distance based on ground size
     // Use a logarithmic scale for very large numbers to avoid extreme distances
@@ -725,6 +759,8 @@ function adjustCameraView() {
     camera.lookAt(0, 0, 0);
     
     // Update controls
+    controls.target.set(0, 0, 0);
+    controls.maxDistance = Math.max(12000, finalDistance * 1.2);
     controls.update();
     
     // Adjust far plane for very large scenes
@@ -785,7 +821,7 @@ function setupKeyboardControls() {
 }
 
 // Process keyboard movement in the animation loop
-function processKeyboardMovement() {
+function processKeyboardMovement(deltaSeconds) {
     if (!camera) return false; // Return false if no camera
     
     let moved = false; // Flag to track if movement occurred
@@ -795,39 +831,38 @@ function processKeyboardMovement() {
     }
 
     // Apply sprint multiplier if shift is pressed
-    const speed = keyState.shift ? MOVEMENT_SPEED * SPRINT_MULTIPLIER : MOVEMENT_SPEED;
+    const speed = (keyState.shift ? MOVEMENT_SPEED * SPRINT_MULTIPLIER : MOVEMENT_SPEED) * deltaSeconds * 60;
     
     // Get the camera's forward and right vectors
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward);
+    camera.getWorldDirection(keyboardForward);
     // Calculate RIGHT = FORWARD x UP (instead of UP x FORWARD)
-    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize(); 
+    keyboardRight.crossVectors(keyboardForward, camera.up).normalize(); 
 
     // Project forward vector onto the horizontal plane (XZ)
-    const forwardXZ = new THREE.Vector3(forward.x, 0, forward.z);
+    keyboardForwardXZ.set(keyboardForward.x, 0, keyboardForward.z);
     
     // Only normalize and use if it's not a zero vector (i.e., not looking straight up/down)
-    if (forwardXZ.lengthSq() > 0.0001) { // Use lengthSq for efficiency, check against small epsilon
-        forwardXZ.normalize();
+    if (keyboardForwardXZ.lengthSq() > 0.0001) { // Use lengthSq for efficiency, check against small epsilon
+        keyboardForwardXZ.normalize();
     } else {
-        forwardXZ.set(0, 0, 0); // Ensure it's zero if looking vertically
+        keyboardForwardXZ.set(0, 0, 0); // Ensure it's zero if looking vertically
     }
     
     // Calculate movement direction based on key states, using projected forward
-    const moveDirection = new THREE.Vector3(0, 0, 0);
+    keyboardMoveDirection.set(0, 0, 0);
     
-    if (keyState.w) moveDirection.add(forwardXZ);
-    if (keyState.s) moveDirection.sub(forwardXZ);
-    if (keyState.d) moveDirection.add(right);
-    if (keyState.a) moveDirection.sub(right);
+    if (keyState.w) keyboardMoveDirection.add(keyboardForwardXZ);
+    if (keyState.s) keyboardMoveDirection.sub(keyboardForwardXZ);
+    if (keyState.d) keyboardMoveDirection.add(keyboardRight);
+    if (keyState.a) keyboardMoveDirection.sub(keyboardRight);
     
     // Normalize movement direction and apply speed
-    if (moveDirection.length() > 0) {
-        moveDirection.normalize().multiplyScalar(speed);
+    if (keyboardMoveDirection.lengthSq() > 0) {
+        keyboardMoveDirection.normalize().multiplyScalar(speed);
         
         // Update camera position
-        camera.position.add(moveDirection);
-        controls.target.add(moveDirection);
+        camera.position.add(keyboardMoveDirection);
+        controls.target.add(keyboardMoveDirection);
         moved = true; // Set flag to true as movement happened
         
         // Update controls - No need to update target for flying
@@ -840,6 +875,8 @@ function processKeyboardMovement() {
 // Animation loop - optimized
 function animate(time) {
     requestAnimationFrame(animate);
+    const deltaSeconds = lastFrameTime ? Math.min((time - lastFrameTime) / 1000, 0.05) : 1 / 60;
+    lastFrameTime = time;
     
     // Calculate FPS for debugging
     if (time - lastTime > 1000) {
@@ -852,7 +889,7 @@ function animate(time) {
     frameCount++;
     
     // Process keyboard input for flying
-    const movedByKey = processKeyboardMovement();
+    const movedByKey = processKeyboardMovement(deltaSeconds);
     
     // Update controls only if WASD keys were not used in this frame
     if (!movedByKey) {
@@ -907,9 +944,7 @@ function onWindowResize() {
 
 // Add a function to reset view to a good starting point
 function resetCameraView() {
-    camera.position.set(600, 400, 600);
-    camera.lookAt(0, 0, 0);
-    controls.update();
+    adjustCameraView();
 }
 
 // Add a "reset view" button to the UI
@@ -964,7 +999,5 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
     
-    // Initialize with default value
-    const defaultPeopleCount = parseInt(document.getElementById('people-count').value);
-    createStadiums(defaultPeopleCount);
+    pendingPeopleCount = parseInt(document.getElementById('people-count').value, 10);
 }); 
